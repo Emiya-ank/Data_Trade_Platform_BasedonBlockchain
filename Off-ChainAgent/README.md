@@ -73,16 +73,16 @@ go run ./test
 默认不会执行链上调用。若要开启，请设置：
 
 ```bash
-FABRIC_ENABLE=1
-FABRIC_MSP_ID=
-FABRIC_PEER_ENDPOINT=
-FABRIC_GATEWAY_PEER=
-FABRIC_TLS_CERT=
-FABRIC_CERT_PATH=
-FABRIC_KEY_PATH=
-FABRIC_CHANNEL=
-FABRIC_CHAINCODE=
-FABRIC_SELLER_CLIENT_ID=
+$env:FABRIC_ENABLE="1"
+$env:FABRIC_MSP_ID="Org1MSP"
+$env:FABRIC_PEER_ENDPOINT="localhost:7051"
+$env:FABRIC_GATEWAY_PEER="peer0.org1.example.com"
+$env:FABRIC_TLS_CERT=".\fabric-samples\test-network\organizations\peerOrganizations\org1.example.com\peers\peer0.org1.example.com\tls\ca.crt"
+$env:FABRIC_CERT_PATH=".\fabric-samples\test-network\organizations\peerOrganizations\org1.example.com\users\User1@org1.example.com\msp\signcerts\User1@org1.example.com-cert.pem"
+$env:FABRIC_KEY_PATH=".\fabric-samples\test-network\organizations\peerOrganizations\org1.example.com\users\User1@org1.example.com\msp\keystore\priv_sk"
+$env:FABRIC_CHANNEL="mychannel"
+$env:FABRIC_CHAINCODE="basic"
+$env:FABRIC_SELLER_CLIENT_ID="eDUwOTo6Q049VXNlcjFAb3JnMS5leGFtcGxlLmNvbSxPVT1jbGllbnQsTD1TYW4gRnJhbmNpc2NvLFNUPUNhbGlmb3JuaWEsQz1VUzo6Q049Y2Eub3JnMS5leGFtcGxlLmNvbSxPPW9yZzEuZXhhbXBsZS5jb20sTD1TYW4gRnJhbmNpc2NvLFNUPUNhbGlmb3JuaWEsQz1VUw=="
 ```
 
 可选参数（有默认值）：
