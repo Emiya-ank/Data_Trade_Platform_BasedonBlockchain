@@ -1,0 +1,30 @@
+# Go
+/bin/
+/pkg/
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+
+# Editor/OS
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*.vscode/
+.idea/
+
+# 应用生成/中间产物
+*.log
+*.tmp
+*.cache
+
+# 机器学习/加密文件及数据输出（按实际需求启用）
+*.bin
+*.json
+*.txt
+
+# 依赖锁文件（通常保留 go.mod/go.sum）
+# go.mod
+# go.sum
