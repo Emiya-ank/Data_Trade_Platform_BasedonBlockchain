@@ -156,11 +156,12 @@ type PublicInputs struct {
 	Ciphertext [MAX_N]string `json:"ciphertext"`
 	Selector   [MAX_N]string `json:"selector"`
 	TextLen    int           `json:"textLen"`
+	KeyHash    string        `json:"keyHash"`
 	Commitment *big.Int      `json:"commitment"`
 }
 
 // 导出公共见证 public.json
-func ExportPublicJSON(ciphertext []*big.Int, selector []*big.Int, textlen int, commitment *big.Int, path string) error {
+func ExportPublicJSON(ciphertext []*big.Int, selector []*big.Int, textlen int, keyHash string, commitment *big.Int, path string) error {
 	if len(ciphertext) != MAX_N {
 		return fmt.Errorf("ciphertext length must be %d, while got %d", MAX_N, len(ciphertext))
 	}
@@ -171,6 +172,7 @@ func ExportPublicJSON(ciphertext []*big.Int, selector []*big.Int, textlen int, c
 		pi.Selector[i] = selector[i].String()
 	}
 	pi.TextLen = textlen
+	pi.KeyHash = keyHash
 	pi.Commitment = commitment
 
 	jsonBytes, err := json.MarshalIndent(pi, "", "  ")
@@ -342,13 +344,16 @@ func RandomPoint() (bn254.G1Affine, *big.Int) {
 }
 
 // ElGamal 加密函数
-// 输入：消息 msg（*bn254.G1Affine），公钥 pub
-// 输出：密文对 (C1, C2) 均为 *bn254.G1Affine
-func ElGamalEncrypt(msg *bn254.G1Affine, pub ElGamalPublicKey) (*bn254.G1Affine, *bn254.G1Affine) {
+// 输入：消息 msg（*bn254.G1Affine），公钥 pub, 可选随机数 k（如果为 nil 则自动生成）
+// 输出：密文对 (C1, C2)，其中 C1 = k*G, C2 = msg + k*Y, 均为 *bn254.G1Affine
+func ElGamalEncrypt(msg *bn254.G1Affine, pub ElGamalPublicKey, k *big.Int) (*bn254.G1Affine, *bn254.G1Affine) {
 	// 选择随机数 k
-	k, err := rand.Int(rand.Reader, fr.Modulus())
-	if err != nil {
-		panic(err)
+	if k == nil {
+		var err error
+		k, err = rand.Int(rand.Reader, fr.Modulus())
+		if err != nil {
+			panic(err)
+		}
 	}
 
 	// 获取G1生成元
