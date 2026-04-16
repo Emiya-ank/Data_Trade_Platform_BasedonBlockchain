@@ -2,8 +2,10 @@ package main
 
 import (
 	offchain "Off-ChainAgent/src"
+	"bytes"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"math/big"
 	"os"
 	"strconv"
@@ -16,8 +18,29 @@ import (
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/frontend/cs/r1cs"
 	"github.com/consensys/gnark/frontend/cs/scs"
+	"github.com/consensys/gnark/std/algebra/emulated/sw_bn254"
 	"github.com/consensys/gnark/test/unsafekzg"
 )
+
+// proofSizeBytes 计算证明对象的字节大小，要求证明对象实现 WriteTo(io.Writer) 方法。
+func proofSizeBytes(proof interface{}) (int64, error) {
+	writerTo, ok := proof.(interface {
+		WriteTo(io.Writer) (int64, error)
+	})
+	if !ok {
+		return 0, fmt.Errorf("proof does not implement WriteTo(io.Writer)")
+	}
+
+	var buf bytes.Buffer
+	n, err := writerTo.WriteTo(&buf)
+	if err != nil {
+		return 0, err
+	}
+	if n > 0 {
+		return n, nil
+	}
+	return int64(buf.Len()), nil
+}
 
 // mustEnv 获取环境变量值，如果未设置则返回错误。
 func mustEnv(key string) (string, error) {
@@ -188,16 +211,21 @@ func main() {
 	if len(rc) != offchain.ROUNDS {
 		panic(fmt.Sprintf("round constants size mismatch: got=%d want=%d", len(rc), offchain.ROUNDS))
 	}
-	fmt.Printf("生成成功! 共 %d 个轮常量\n", len(rc))
+	fmt.Printf("轮常量生成成功! 共 %d 个轮常量\n", len(rc))
 
 	fmt.Println("3. 密钥流生成")
-	key := big.NewInt(19)
+	M, r := offchain.RandomPoint()
+	key, err := offchain.PointToFrPoseidon(&M)
+	if err != nil {
+		panic(fmt.Sprintf("PointToFrPoseidon failed: %v", err))
+	}
+	fmt.Printf("随机生成的密钥: %s\n", key.String())
 	nonce := big.NewInt(9)
 	keystream := offchain.KeystreamGeneration(key, nonce, len(plaintext))
 	if len(keystream) != len(plaintext) {
 		panic(fmt.Sprintf("keystream length mismatch: got=%d want=%d", len(keystream), len(plaintext)))
 	}
-	fmt.Printf("生成成功! keystream length=%d\n", len(keystream))
+	fmt.Printf("密钥流生成成功! keystream length=%d\n", len(keystream))
 
 	fmt.Println("4. CTR 模式下的 MiMC 加密")
 	ciphertext := offchain.MimcEncryption(plaintext, key, nonce, textLen)
@@ -217,7 +245,11 @@ func main() {
 	}
 	fmt.Println("解密成功! 明文和解密结果一致")
 
-	fmt.Println("6. Write ciphertext")
+	// ElGamal 加密
+	_, pub := offchain.GenerateElGamalKey()
+	c1, c2 := offchain.ElGamalEncrypt(&M, pub, r)
+
+	fmt.Println("6. 导出密文")
 	if err := offchain.WriteText(testpath2, ciphertext); err != nil {
 		panic(fmt.Sprintf("WriteText failed: %v", err))
 	}
@@ -239,8 +271,11 @@ func main() {
 		}
 	}
 	random := big.NewInt(17)
+	keyHashBytes := offchain.KeyPoseidonHash(key)
+	keyHashInt := new(big.Int).SetBytes(keyHashBytes)
+	keyHashInt.Mod(keyHashInt, fr.Modulus())
 	commitment := offchain.PedersenCommitment(plaintext, random, textLen)
-	if err := offchain.ExportPublicJSON(ciphertext, selector, textLen, commitment, publicInputspath); err != nil {
+	if err := offchain.ExportPublicJSON(ciphertext, selector, textLen, keyHashInt.String(), commitment, publicInputspath); err != nil {
 		panic(fmt.Sprintf("ExportPublicJSON failed: %v", err))
 	}
 	fmt.Println("公共输入导出成功!")
@@ -261,24 +296,27 @@ func main() {
 	if err := offchain.ExportVerifyingKey(vk, vkpath); err != nil {
 		panic(fmt.Sprintf("export vk failed: %v", err))
 	}
-	fmt.Printf("vk 导出成功!")
+	fmt.Println("vk 导出成功!")
 	if err := offchain.ExportProvingKey(pk, pkpath); err != nil {
 		panic(fmt.Sprintf("export pk failed: %v", err))
 	}
-	fmt.Printf("pk 导出成功!")
-
+	fmt.Println("pk 导出成功!")
 
 	fmt.Println("11. Groth16 prove")
 	var w offchain.CTRMiMCCircuit
 	w.Key = key
-	keyHashBytes := offchain.KeyPoseidonHash(key)
-	keyHashInt := new(big.Int).SetBytes(keyHashBytes)
-	keyHashInt.Mod(keyHashInt, fr.Modulus())
 	w.KeyHash = keyHashInt
 	w.Nonce = nonce
 	w.TextLen = textLen
 	w.Randomness = random
 	w.Commitment = commitment
+	var rFr fr.Element
+	rFr.SetBigInt(r)
+	w.C1 = sw_bn254.NewG1Affine(*c1)
+	w.C2 = sw_bn254.NewG1Affine(*c2)
+	w.Pubkey = sw_bn254.NewG1Affine(*pub.Y)
+	w.R = sw_bn254.NewScalar(rFr)
+	w.M = sw_bn254.NewG1Affine(M)
 
 	for i := 0; i < offchain.MAX_N; i++ {
 		if i < textLen {
@@ -300,23 +338,31 @@ func main() {
 	if err != nil {
 		panic(fmt.Sprintf("new witness failed: %v", err))
 	}
+	start := time.Now()
 	proof, err := groth16.Prove(r1csDef, pk, witness)
 	if err != nil {
 		panic(fmt.Sprintf("groth16 prove failed: %v", err))
 	}
+	elapsed := time.Since(start)
+	sizebytes, err := proofSizeBytes(proof)
 	if err := offchain.ExportProof(proof, proofpath); err != nil {
 		panic(fmt.Sprintf("export proof failed: %v", err))
 	}
 	fmt.Println("Groth16 证明生成成功!")
+	fmt.Printf("Proof generation time: %s\n", elapsed)
+	fmt.Printf("Groth16 Proof size: %d bytes\n", sizebytes)
 
 	fmt.Println("12. Groth16 verify")
 	publicWitness, err := witness.Public()
 	if err != nil {
 		panic(fmt.Sprintf("public witness failed: %v", err))
 	}
+	start = time.Now()
 	if err := groth16.Verify(proof, vk, publicWitness); err != nil {
 		panic(fmt.Sprintf("groth16 verify failed: %v", err))
 	}
+	elapsed = time.Since(start)
+	fmt.Printf("Groth16 verification time: %s\n", elapsed)
 	fmt.Println("Groth16 验证成功!")
 
 	fmt.Println("13. Plonk prove+verify")
@@ -336,18 +382,26 @@ func main() {
 	if err != nil {
 		panic(fmt.Sprintf("plonk witness failed: %v", err))
 	}
+	start = time.Now()
 	proofPlonk, err := plonk.Prove(ccs, pkPlonk, witnessPlonk)
 	if err != nil {
 		panic(fmt.Sprintf("plonk prove failed: %v", err))
 	}
+	elapsed = time.Since(start)
+	sizebytes, err = proofSizeBytes(proofPlonk)
+	fmt.Printf("Plonk proof generation time: %s\n", elapsed)
 	publicWitnessPlonk, err := witnessPlonk.Public()
 	if err != nil {
 		panic(fmt.Sprintf("plonk public witness failed: %v", err))
 	}
+	start = time.Now()
 	if err := plonk.Verify(proofPlonk, vkPlonk, publicWitnessPlonk); err != nil {
 		panic(fmt.Sprintf("plonk verify failed: %v", err))
 	}
+	elapsed = time.Since(start)
+	fmt.Printf("Plonk verification time: %s\n", elapsed)
 	fmt.Println("Plonk 证明和验证成功!")
+	fmt.Printf("Plonk Proof size: %d bytes\n", sizebytes)
 
 	fmt.Println("14. Fabric 交易流程")
 
