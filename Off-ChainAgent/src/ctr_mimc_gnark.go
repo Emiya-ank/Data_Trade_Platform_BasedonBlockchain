@@ -101,7 +101,12 @@ type CTRMiMCCircuit struct {
 	Nonce      frontend.Variable        //密钥流偏移量（有限域上的随机数）
 	Commitment frontend.Variable        //Pedersen 承诺值
 	Randomness frontend.Variable        //Pedersen 承诺的随机数
+	C1     sw_bn254.G1Affine `gnark:",public"`	//ElGamal 密文 C1 = r*G
+	C2     sw_bn254.G1Affine `gnark:",public"` 	//ElGamal 密文 C2 = M + r*Pubkey
+	Pubkey sw_bn254.G1Affine `gnark:",public"`	//ElGamal 公钥 Pubkey = s*G
 
+	R sw_bn254.Scalar    //ElGamal 随机数 r
+	M sw_bn254.G1Affine  //ElGamal 明文 M
 }
 
 // CTR 模式下 MiMC 密码电路逻辑定义
@@ -157,6 +162,24 @@ func (c *CTRMiMCCircuit) Define(api frontend.API) error {
 	randomTerm := api.Mul(c.Randomness, H)
 	sum = api.Add(sum, randomTerm)
 	api.AssertIsEqual(c.Commitment, sum)
+
+	// ElGamal 加密电路约束
+	curve, err := sw_emulated.New[sw_bn254.BaseField, sw_bn254.ScalarField](api, sw_emulated.GetBN254Params())
+	if err != nil {
+		return err
+	}
+
+	curve.AssertIsOnCurve(&c.C1)
+	curve.AssertIsOnCurve(&c.C2)
+	curve.AssertIsOnCurve(&c.Pubkey)
+	curve.AssertIsOnCurve(&c.M)
+
+	rG := curve.ScalarMulBase(&c.R)
+	curve.AssertIsEqual(&c.C1, rG)
+
+	rPubkey := curve.ScalarMul(&c.Pubkey, &c.R)
+	expectedC2 := curve.AddUnified(&c.M, rPubkey)
+	curve.AssertIsEqual(&c.C2, expectedC2)
 	return nil
 }
 
